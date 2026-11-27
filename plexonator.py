@@ -9,6 +9,7 @@ Run:   ./plexonator.py            (needs uv; deps install themselves)
 Demo:  ./plexonator.py --demo     (fake data, or --demo=calm)
 Test:  ./plexonator.py --selftest
 """
+import asyncio
 import json
 import os
 import random
@@ -17,6 +18,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from datetime import date, datetime, timedelta
@@ -27,7 +29,7 @@ from rich.text import Text
 from textual.app import App
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Input, Label, Select, Static, Switch
+from textual.widgets import DataTable, Footer, Input, Label, Static
 
 HOME = Path.home()
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "plexonator" / "config.json"
@@ -319,33 +321,59 @@ def spark(values):
 
 
 # ── UI ──────────────────────────────────────────────────────────────────────
+class Choice(Static, can_focus=True):
+    """One settings row: left/right (or enter) steps through the options."""
+    BINDINGS = [("left", "step(-1)"), ("right", "step(1)"), ("enter", "step(1)")]
+
+    def __init__(self, label, options, value, **kw):
+        super().__init__(**kw)
+        self.label, self.options = label, options
+        self.index = options.index(value) if value in options else 0
+
+    @property
+    def value(self):
+        return self.options[self.index]
+
+    def render(self):
+        v = self.value
+        text = ("on" if v else "off") if isinstance(v, bool) else f"{v}s" if isinstance(v, int) else v
+        return f"{'▸' if self.has_focus else ' '} {self.label:<10}[dim]◀[/] [b]{text}[/] [dim]▶[/]"
+
+    def on_focus(self):
+        self.refresh()
+
+    def on_blur(self):
+        self.refresh()
+
+    def action_step(self, delta):
+        self.index = (self.index + delta) % len(self.options)
+        self.refresh()
+        self.screen.changed(self)
+
+
 class Settings(ModalScreen):
-    BINDINGS = [("escape", "dismiss", "Cancel")]
+    """Changes apply as you make them and are saved when the dialog closes."""
+    BINDINGS = [("escape", "close", "Close"), ("up", "app.focus_previous"), ("down", "app.focus_next")]
 
     def compose(self):
         cfg = self.app.cfg
         with Vertical(id="dialog"):
-            yield Label("[b]SETTINGS[/]  [dim]saved to " + str(CONFIG).replace(str(HOME), "~") + "[/]")
-            yield Label("Refresh interval")
-            yield Select([(f"{n}s", n) for n in (1, 2, 5, 10)], value=cfg["refresh"], allow_blank=False, id="refresh")
-            yield Label("Theme")
-            yield Select([(t, t) for t in sorted(self.app.available_themes)], value=self.app.theme,
-                         allow_blank=False, id="theme")
-            yield Label("Show logo")
-            yield Switch(cfg["logo"], id="logo-on")
-            yield Label("Agent process names (comma separated)")
-            yield Input(cfg["agents"], id="agent-names")
-            with Horizontal(id="buttons"):
-                yield Button("Save", variant="primary", id="save")
-                yield Button("Cancel", id="cancel")
+            yield Label("[b]SETTINGS[/]")
+            yield Choice("Refresh", [1, 2, 5, 10], cfg["refresh"], id="set-refresh")
+            yield Choice("Theme", sorted(self.app.available_themes), self.app.theme, id="set-theme")
+            yield Choice("Logo", [True, False], cfg["logo"], id="set-logo")
+            yield Label("  Agent process names (comma separated)")
+            yield Input(cfg["agents"], id="set-agents")
+            yield Label("[dim]↑↓ move · ←→ or enter change · esc close and save[/]")
 
-    def on_button_pressed(self, event):
-        if event.button.id != "save":
-            return self.dismiss(None)
-        self.dismiss({"refresh": self.query_one("#refresh", Select).value,
-                      "theme": self.query_one("#theme", Select).value,
-                      "logo": self.query_one("#logo-on", Switch).value,
-                      "agents": self.query_one("#agent-names", Input).value})
+    def changed(self, choice):
+        self.app.cfg[choice.id.removeprefix("set-")] = choice.value  # ids are prefixed: the dashboard has #logo and #agents
+        self.app.apply_config()  # live preview: theme, logo and refresh rate take effect at once
+
+    def action_close(self):
+        self.app.cfg["agents"] = self.query_one("#set-agents", Input).value
+        save_json(CONFIG, self.app.cfg)
+        self.dismiss()
 
 
 class Plexonator(App):
@@ -361,13 +389,14 @@ class Plexonator(App):
     Settings { align: center middle; }
     #dialog { width: 64; height: auto; border: round $accent; background: $surface; padding: 1 2; }
     #dialog Label { margin-top: 1; }
-    #buttons { height: auto; margin-top: 1; }
-    #buttons Button { margin-right: 2; }
+    Choice { height: 1; margin-top: 1; }
+    Choice:focus { background: $boost; color: $accent; }
     """
 
     def __init__(self, demo=None):
         super().__init__()
         self.demo = demo  # None, or a DEMO scenario name
+        self.main = None  # the dashboard screen, set on mount
         self.cfg = {**DEFAULTS, **load_json(CONFIG, {})}
         self.tokens = demo_tokens() if demo else load_json(CACHE, {})
         self.scan_status = "demo data" if demo else "scanning…"
@@ -384,8 +413,9 @@ class Plexonator(App):
         yield Footer()
 
     def on_mount(self):
-        self.query_one("#sys").border_title = "SYSTEM"
-        self.query_one("#tok").border_title = "TOKENS"
+        self.main = self.screen
+        self.main.query_one("#sys").border_title = "SYSTEM"
+        self.main.query_one("#tok").border_title = "TOKENS"
         psutil.cpu_percent(None)
         self.timer = None
         self.apply_config()
@@ -401,18 +431,15 @@ class Plexonator(App):
         self.on_resize()
 
     def on_resize(self, event=None):
+        if not self.main:
+            return  # a resize can arrive before mount
         size = event.size if event else self.size  # self.size is still the old size during a resize
-        self.query_one("#logo").display = self.cfg["logo"] and size.width >= 88 and size.height >= 30
-        self.query_one("#top").set_class(size.width < 124, "narrow")  # side-pane widths: stack the boxes
+        self.main.query_one("#logo").display = self.cfg["logo"] and size.width >= 88 and size.height >= 30
+        self.main.query_one("#top").set_class(size.width < 124, "narrow")  # side-pane widths: stack the boxes
         self.call_after_refresh(self.tick)  # bars are sized from the laid-out panel width
 
     def action_settings(self):
-        def done(new):
-            if new:
-                self.cfg.update(new)
-                save_json(CONFIG, self.cfg)
-                self.apply_config()
-        self.push_screen(Settings(), done)
+        self.push_screen(Settings(), lambda _: self.apply_config())
 
     def slow_loop(self):
         """Background thread: multiplexer layout and token logs change slowly and cost more to read."""
@@ -454,7 +481,7 @@ class Plexonator(App):
                 "uptime": now - psutil.boot_time()}
 
     def render_system(self):
-        w = max(10, self.query_one("#sys").size.width - 24)
+        w = max(10, self.main.query_one("#sys").size.width - 24)
         s = demo_system(self.demo) if self.demo else self.read_system()
         cores, load, down, up = s["cores"], s["load"], s["down"], s["up"]
         cpu = sum(cores) / len(cores)
@@ -471,7 +498,7 @@ class Plexonator(App):
             f"[b $accent]NET [/] [$success]↓[/] {human(down, 'B/s'):>9}  [$warning]↑[/] {human(up, 'B/s'):>9}"
             f"   [b $accent]LOAD[/] {load[0]:.2f} {load[1]:.2f} {load[2]:.2f}",
         ]
-        box = self.query_one("#sys")
+        box = self.main.query_one("#sys")
         box.update("\n".join(lines))
         box.border_subtitle = f"{s['host']} · up {dur(s['uptime'])} · {datetime.now():%H:%M:%S}"
 
@@ -486,7 +513,7 @@ class Plexonator(App):
                 name = f"[b $accent]{prov.upper():<7}[/]" if i == 0 else " " * 7
                 lines.append(f"{name} [dim]{label:<7}[/]{human(t[0]):>8}{human(t[1]):>8}{human(t[2]):>9}"
                              f"{human(t[3]):>9}[b]{human(sum(t)):>8}[/]")
-        box = self.query_one("#tok")
+        box = self.main.query_one("#tok")
         box.update("\n".join(lines))
         box.border_subtitle = self.scan_status
 
@@ -495,7 +522,7 @@ class Plexonator(App):
         rows = demo_agents(self.demo) if self.demo else find_agents(names, self.procs, self.mux)
         narrow = self.size.width < 124
         task_w = 24 if narrow else max(24, self.size.width - 100)  # the task column takes the spare width
-        table = self.query_one("#agents", DataTable)
+        table = self.main.query_one("#agents", DataTable)
         cursor = table.cursor_row
         table.clear(columns=True)  # columns too: their widths never shrink otherwise
         table.add_columns("", "AGENT", "PROJECT", "TASK", "WHERE", "CPU", "MEM", "UP", "ACTIVE")
@@ -541,7 +568,29 @@ def selftest():
     assert agent_name("node", ["node", "/x/bin/codex"], names) == "codex"
     assert agent_name("vim", ["vim", "codex"], names) is None
     assert (human(999), human(1500), human(2_500_000), dur(59), dur(3700)) == ("999", "1.5K", "2.5M", "59s", "1h01m")
+    asyncio.run(selftest_settings())
     print("selftest ok")
+
+
+async def selftest_settings():
+    """Arrow keys drive the dialog, the theme previews live, and closing saves."""
+    global CONFIG
+    real, CONFIG = CONFIG, Path(tempfile.mkdtemp()) / "config.json"  # never touch the user's config
+    try:
+        app = Plexonator(demo="calm")
+        app.cfg = dict(DEFAULTS)
+        async with app.run_test(size=(130, 40)) as pilot:
+            await pilot.press("s", "down")  # first row is Refresh, second is Theme
+            before = app.theme
+            await pilot.press("right")
+            assert app.theme != before and app.cfg["theme"] == app.theme, "theme should preview live"
+            await pilot.press("up", "left")  # back to Refresh: 2s -> 1s
+            assert app.cfg["refresh"] == 1, app.cfg
+            app.tick()  # the dashboard must keep drawing underneath the dialog
+            await pilot.press("escape")
+            assert load_json(CONFIG, {})["theme"] == app.theme
+    finally:
+        CONFIG = real
 
 
 if __name__ == "__main__":
