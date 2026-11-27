@@ -20,6 +20,7 @@ SHOTS = [
     ("hero", "busy", "tokyo-night", (150, 34), None),
     ("calm", "calm", "tokyo-night", (150, 34), None),
     ("settings", "busy", "tokyo-night", (150, 34), "s"),
+    ("detail", "busy", "tokyo-night", (150, 34), "enter"),
     ("side", "busy", "tokyo-night", (76, 46), None),
     ("gruvbox", "busy", "gruvbox", (150, 34), None),
     ("dracula", "busy", "dracula", (150, 34), None),

@@ -72,7 +72,7 @@
   figcaption { color: var(--dim); font-size: .85rem; margin-top: .7rem; }
   figure { margin: 0; }
 
-  .features { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .features { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .features .text { padding: 1.1rem 1.4rem 1.4rem; }
   .features h3 { margin: 0 0 .4rem; font-size: 1.05rem; color: var(--bright); }
   .features p { margin: 0; text-wrap: pretty; }
@@ -113,7 +113,7 @@
   <div class="hero" id="home">
     <h1><span>Plexonator.</span> Monitor your agents, and see what they eat. It is cool AF.</h1>
     <p class="tagline">Slap this on your multiplexer of choice and feel like a god.</p>
-    <p class="lede">You are probably here because you are sloperating with 100 agents open in different panes. What a time to be alive. Plexonator shows you what each one is up to, what it is doing to your machine, and how many tokens you have burned. Supports Claude Code, Codex and Gemini, on tmux and cmux. Easy to attach to your startup scripts. Your coworkers walking past you will want it too.</p>
+    <p class="lede">You are probably here because you are sloperating with 100 agents open in different panes. What a time to be alive. Plexonator shows you which ones need you, what each one is doing, and how many tokens and how much of your machine each one is eating. Supports Claude Code, Codex and Gemini, on tmux and cmux. Easy to attach to your startup scripts. Your coworkers walking past you will want it too.</p>
     <div class="cmd"><span class="g">$</span><code id="install-cmd">git clone https://github.com/EmilSuuronen/plexonator &amp;&amp; ./plexonator/plexonator.py</code><button type="button" class="copy" data-copy="install-cmd">copy</button></div>
     <p class="note">Linux and WSL. Needs <a href="https://docs.astral.sh/uv/">uv</a>, which fetches Python and the two dependencies on first run.</p>
   </div>
@@ -123,7 +123,7 @@
       <div class="pane active plex">
         <header><b>0</b> plexonator</header>
         <img class="shot" src="shots/hero.svg" width="1830" height="830"
-             alt="plexonator running in a terminal: a system panel with CPU, memory, disk and network, a token panel with totals for Claude and Codex, and a table of nine agents showing project, task, pane, CPU, memory and last activity.">
+             alt="plexonator running in a terminal: a system panel with CPU, memory, disk and network, a token panel with totals for Claude and Codex, and a table of nine agents showing project, task, state, context use, tokens, CPU, memory, last activity and pane. One agent is marked as needing you.">
       </div>
       <div class="pane a1" aria-hidden="true">
         <header><b>1</b> claude · ~/code/orbital-api</header>
@@ -160,31 +160,51 @@
         <div class="cmd"><span class="g">$</span><code id="c2">git clone https://github.com/EmilSuuronen/plexonator &amp;&amp; ./plexonator/plexonator.py</code><button type="button" class="copy" data-copy="c2">copy</button></div></li>
       <li><span>Optional: open it with every new tmux session. Add this to <span class="w">~/.tmux.conf</span>, with the path you cloned to.</span>
         <div class="cmd"><code id="c3">set-hook -g session-created 'split-window -h -l 40% ~/plexonator/plexonator.py'</code><button type="button" class="copy" data-copy="c3">copy</button></div></li>
+      <li><span>Optional: exact "needs you" status for Claude Code. This adds a small hook to <span class="w">~/.claude/settings.json</span> and keeps a backup; <span class="w">--uninstall-hooks</span> removes it.</span>
+        <div class="cmd"><span class="g">$</span><code id="c4">./plexonator/plexonator.py --install-hooks</code><button type="button" class="copy" data-copy="c4">copy</button></div></li>
     </ol>
-    <p class="note">Keys: <span class="w">s</span> settings, <span class="w">q</span> quit.</p>
+    <p class="note">Keys: <span class="w">enter</span> agent details, <span class="w">g</span> go to pane, <span class="w">s</span> settings, <span class="w">q</span> quit.</p>
   </section>
 
   <section id="what">
     <h2>What it shows</h2>
     <p class="sub">It only reads: process information and the session logs your agents already write. Nothing is sent anywhere.</p>
     <div class="win features">
-      <div class="pane"><header><b>0</b> agents</header><div class="text">
-        <h3>Every agent, in one table</h3>
-        <p>Finds running Claude Code, Codex, Gemini, aider and opencode processes. For each: the project folder, the pane it lives in, CPU, memory, uptime, and when it last did something. Working agents sort to the top.</p>
+      <div class="pane"><header><b>0</b> needs you</header><div class="text">
+        <h3>Who is waiting for you</h3>
+        <p>Each agent is marked working, done, idle or <span class="r">needs you</span>. An agent blocked on a permission prompt jumps to the top of the table. Exact for Claude Code once you install the hooks; estimated from activity otherwise.</p>
       </div></div>
-      <div class="pane"><header><b>1</b> tokens</header><div class="text">
-        <h3>Token totals</h3>
-        <p>Input, output and cache tokens for today, the last 7 days and all time, read from the Claude Code and Codex session logs on your disk.</p>
+      <div class="pane"><header><b>1</b> jump</header><div class="text">
+        <h3>Go straight to the pane</h3>
+        <p>Move to an agent and press <span class="w">g</span>. Your multiplexer focuses the pane that agent runs in. Works with tmux and cmux.</p>
       </div></div>
-      <div class="pane"><header><b>2</b> system</header><div class="text">
+      <div class="pane"><header><b>2</b> per agent</header><div class="text">
+        <h3>Context and tokens per agent</h3>
+        <p>How full each session's context window is, and how many tokens it has used, right in the table. For Claude Code and Codex. Spot the one about to run out before it does.</p>
+      </div></div>
+      <div class="pane"><header><b>3</b> totals</header><div class="text">
+        <h3>Token totals and limits</h3>
+        <p>Input, output and cache tokens for today, the last 7 days and all time, plus your Codex 5-hour and weekly limits when Codex reports them.</p>
+      </div></div>
+      <div class="pane"><header><b>4</b> system</header><div class="text">
         <h3>Your machine</h3>
-        <p>CPU history and per-core load, memory, swap, disk, network speed and load average, so you can see when ten agents are too many.</p>
+        <p>CPU history and per-core load, memory, swap, disk and network, and what all your agents add up to, so you can see when ten agents are too many.</p>
       </div></div>
-      <div class="pane"><header><b>3</b> settings</header><div class="text">
+      <div class="pane"><header><b>5</b> settings</header><div class="text">
         <h3>Change it from inside</h3>
-        <p>Press <span class="w">s</span> for refresh rate, theme, logo and the list of agent names to look for. Saved to one small config file.</p>
+        <p>Press <span class="w">s</span>. Arrow keys move and change; themes preview live. Saved to one small config file.</p>
       </div></div>
     </div>
+  </section>
+
+  <section id="detail">
+    <h2>Press enter on an agent</h2>
+    <p class="sub">See what it was last asked, what it last ran, what it last said, and why it is waiting, without leaving your pane.</p>
+    <div class="win"><div class="pane active">
+      <header><b>0</b> plexonator · agent detail</header>
+      <img class="shot" src="shots/detail.svg" width="1830" height="830" loading="lazy"
+           alt="The agent detail panel: state needs you with the permission message, task, model, branch, pane, folder, a context bar at 71 percent, session tokens, and the last prompt, last tool call and last reply.">
+    </div></div>
   </section>
 
   <section id="themes">
@@ -250,8 +270,9 @@
     <a href="#home">0:home</a>
     <a href="#install">1:install</a>
     <a href="#what">2:what</a>
-    <a href="#themes">3:themes</a>
-    <a href="#layouts">4:layouts</a>
+    <a href="#detail">3:detail</a>
+    <a href="#themes">4:themes</a>
+    <a href="#layouts">5:layouts</a>
   </nav>
   <a class="gh" href="https://github.com/EmilSuuronen/plexonator">github ↗</a>
 </div>
