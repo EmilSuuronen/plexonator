@@ -1038,7 +1038,10 @@ async def selftest_settings():
             app.tick()  # the dashboard must keep drawing underneath the dialog
             await pilot.press("escape")
             assert load_json(CONFIG, {})["theme"] == app.theme
-            await pilot.click("#sys")  # clicking a panel must not strand the arrow keys
+            from textual import events
+            app.post_message(events.AppBlur())  # the pane loses terminal focus...
+            await pilot.pause()
+            await pilot.click("#sys")  # ...and is clicked back into without a focus-in event
             await pilot.pause()
             assert isinstance(app.focused, DataTable), app.focused
             await pilot.press("enter")  # the table row opens the detail panel
