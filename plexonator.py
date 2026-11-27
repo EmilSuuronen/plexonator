@@ -579,7 +579,7 @@ def bar(pct, width):
 
 # state -> symbol, label, Rich style (table cells), theme colour (markup)
 STATES = {"needs": ("◆", "needs you", "bold red", "$error"), "working": ("●", "working", "green", "$success"),
-          "done": ("✔", "done", "dodger_blue1", "$primary"), "idle": ("○", "idle", "grey50", "$text-muted")}
+          "done": ("✔", "done", "dodger_blue1", "$primary"), "idle": ("○", "idle", "grey50", "dim")}
 
 
 def ctx_pct(r):
@@ -1013,6 +1013,14 @@ def selftest_agents():
     log.write_text(json.dumps({"payload": {"type": "function_call", "name": "shell", "arguments": '{"cmd": "ls"}'}}) + "\n")
     assert read_detail(log, "codex") == {"tool": "shell ls"}
     assert read_detail(tmp / "missing", "claude") == {}
+
+    from textual.content import Content
+    hostile = "[/] [bold] $accent \\[x] end\\"  # log text must never be read as markup
+    for state in STATES:  # every state's colour tag must parse, with and without optional fields
+        for extra in ({}, {"ctx": 5000, "tok": [1, 2, 3, 4], "hook": {"message": hostile}, "model": hostile}):
+            r = {"state": state, "title": hostile, "where": hostile, "pid": 1, "started": 0, "act": None,
+                 "cwd": hostile, "win": 200_000, **extra}
+            Content.from_markup(detail_text(r, {"prompt": hostile, "tool": hostile, "reply": hostile, "branch": hostile}))
 
     files = {"a": {"limits_ts": "1", "limits": {"primary": {"used_percent": 5, "window_minutes": 300, "resets_at": 2000}}},
              "b": {"limits_ts": "2", "limits": {"primary": {"used_percent": 22, "window_minutes": 300, "resets_at": 2000},
