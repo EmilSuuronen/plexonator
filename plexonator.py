@@ -6,10 +6,12 @@
 """plexonator: one-pane dashboard for AI coding agents and system resources (Linux).
 
 Run:   ./plexonator.py            (needs uv; deps install themselves)
+Demo:  ./plexonator.py --demo     (fake data, or --demo=calm)
 Test:  ./plexonator.py --selftest
 """
 import json
 import os
+import random
 import re
 import shutil
 import socket
@@ -232,6 +234,57 @@ def find_agents(names, procs, mux):
     return rows
 
 
+# ── demo mode ───────────────────────────────────────────────────────────────
+# Fake data for screenshots and for trying the UI: --demo reads nothing from this machine.
+# Row: agent, folder, task, pane, cpu %, memory MB, uptime minutes, seconds idle (0 = working).
+DEMO = {
+    "busy": [
+        ("claude", "~/code/orbital-api", "Refactor auth middleware", "tmux dev:1.0", 34, 512, 184, 0),
+        ("codex", "~/code/orbital-api", "Fix flaky checkout test", "tmux dev:1.1", 27, 318, 96, 0),
+        ("claude", "~/code/pixel-forge", "Port shaders to WGSL", "tmux dev:2.0", 41, 604, 301, 0),
+        ("gemini", "~/code/tidepool-web", "Migrate router to v7", "tmux web:1.0", 19, 287, 47, 0),
+        ("claude", "~/code/kiln", "Profile incremental build", "tmux dev:3.0", 22, 455, 122, 0),
+        ("aider", "~/code/lantern", "Add rate limiter", "tmux web:1.1", 2, 196, 58, 95),
+        ("codex", "~/code/pixel-forge", "Review PR #482", "tmux dev:2.1", 1, 301, 240, 410),
+        ("claude", "~/code/tidepool-web", "Write release notes", "tmux web:2.0", 0, 338, 512, 1900),
+        ("opencode", "~/code/kiln", "Bisect cache regression", "tmux dev:3.1", 0, 244, 75, 3300),
+    ],
+    "calm": [
+        ("claude", "~/code/lantern", "Add rate limiter", "tmux main:1.0", 18, 402, 35, 0),
+        ("codex", "~/code/lantern", "Update API docs", "tmux main:1.1", 1, 290, 35, 240),
+        ("claude", "~/code/kiln", "Waiting for review", "tmux main:2.0", 0, 311, 610, 5400),
+    ],
+}
+
+
+def demo_agents(scenario):
+    now, rows = time.time(), []
+    for i, (name, cwd, title, where, cpu, mem, up, idle) in enumerate(DEMO[scenario]):
+        rows.append({"name": name, "pid": 4000 + i, "cpu": cpu + random.uniform(0, 5) * (idle == 0),
+                     "mem": mem * 1e6, "cwd": cwd, "started": now - up * 60, "act": now - idle - 2,
+                     "working": idle == 0, "where": where, "title": title})
+    return rows
+
+
+def demo_tokens():
+    today = date.today().isoformat()
+    week = (date.today() - timedelta(days=3)).isoformat()
+
+    def days(scale):
+        return {"demo": {"days": {today: [int(v * scale) for v in (41_000, 1_900_000, 420_000_000, 7_800_000)],
+                                  week: [int(v * scale) for v in (212_000, 8_300_000, 1_700_000_000, 36_000_000)],
+                                  "2000-01-01": [int(v * scale) for v in (3_100_000, 96_000_000, 21e9, 410_000_000)]}}}
+    return {"claude": days(1), "codex": days(0.45)}
+
+
+def demo_system(scenario):
+    base, gb = (58 if scenario == "busy" else 11), 1e9
+    return {"cores": [max(0, min(100, random.gauss(base, 22))) for _ in range(16)],
+            "mem": (62.0, 19.8 * gb, 32 * gb), "swap": (3.0, 0.24 * gb, 8 * gb), "disk": (41.0, 410 * gb, 1000 * gb),
+            "down": random.uniform(2e5, 4e6), "up": random.uniform(2e4, 6e5),
+            "load": (base / 9, base / 11, base / 14), "host": "devbox", "uptime": 3 * 86400 + 5 * 3600}
+
+
 # ── formatting ──────────────────────────────────────────────────────────────
 def human(n, unit=""):
     for suffix in ("", "K", "M", "G", "T"):
@@ -301,6 +354,8 @@ class Plexonator(App):
     CSS = """
     #logo { width: 100%; height: auto; content-align: center middle; color: $accent; text-style: bold; }
     #top { height: 9; }
+    #top.narrow { layout: vertical; height: 18; }
+    #top.narrow Static { height: 9; }
     #sys, #tok { width: 1fr; height: 100%; border: round $primary; padding: 0 1; border-title-color: $accent; }
     #agents { height: 1fr; border: round $primary; border-title-color: $accent; }
     Settings { align: center middle; }
@@ -310,12 +365,15 @@ class Plexonator(App):
     #buttons Button { margin-right: 2; }
     """
 
-    def __init__(self):
+    def __init__(self, demo=None):
         super().__init__()
+        self.demo = demo  # None, or a DEMO scenario name
         self.cfg = {**DEFAULTS, **load_json(CONFIG, {})}
-        self.tokens = load_json(CACHE, {})
-        self.scan_status = "scanning…"
+        self.tokens = demo_tokens() if demo else load_json(CACHE, {})
+        self.scan_status = "demo data" if demo else "scanning…"
         self.mux, self.procs, self.cpu_hist, self.net_prev = {}, {}, [], None
+        if demo:  # a history to draw from the first frame
+            self.cpu_hist = [sum(c := demo_system(demo)["cores"]) / len(c) for _ in range(200)]
 
     def compose(self):
         yield Static(LOGO, id="logo", markup=False)
@@ -333,7 +391,8 @@ class Plexonator(App):
         psutil.cpu_percent(None)
         self.timer = None
         self.apply_config()
-        threading.Thread(target=self.slow_loop, daemon=True).start()
+        if not self.demo:
+            threading.Thread(target=self.slow_loop, daemon=True).start()
 
     def apply_config(self):
         if self.cfg["theme"] in self.available_themes:
@@ -342,10 +401,11 @@ class Plexonator(App):
             self.timer.stop()
         self.timer = self.set_interval(self.cfg["refresh"], self.tick)
         self.on_resize()
-        self.tick()
 
     def on_resize(self, event=None):
         self.query_one("#logo").display = self.cfg["logo"] and self.size.width >= 88 and self.size.height >= 30
+        self.query_one("#top").set_class(self.size.width < 124, "narrow")  # side-pane widths: stack the boxes
+        self.call_after_refresh(self.tick)  # bars are sized from the laid-out panel width
 
     def action_settings(self):
         def done(new):
@@ -381,11 +441,7 @@ class Plexonator(App):
         self.render_tokens()
         self.render_agents()
 
-    def render_system(self):
-        w = max(10, self.query_one("#sys").size.width - 24)
-        cores = psutil.cpu_percent(None, percpu=True)
-        cpu = sum(cores) / len(cores)
-        self.cpu_hist = (self.cpu_hist + [cpu])[-w:]
+    def read_system(self):
         mem, swap, disk = psutil.virtual_memory(), psutil.swap_memory(), psutil.disk_usage("/")
         net, now = psutil.net_io_counters(), time.time()
         down = up = 0.0
@@ -393,22 +449,32 @@ class Plexonator(App):
             dt = max(now - self.net_prev[0], 1e-6)
             down, up = (net.bytes_recv - self.net_prev[1]) / dt, (net.bytes_sent - self.net_prev[2]) / dt
         self.net_prev = (now, net.bytes_recv, net.bytes_sent)
-        load = os.getloadavg()
+        return {"cores": psutil.cpu_percent(None, percpu=True), "mem": (mem.percent, mem.used, mem.total),
+                "swap": (swap.percent, swap.used, swap.total), "disk": (disk.percent, disk.used, disk.total),
+                "down": down, "up": up, "load": os.getloadavg(), "host": socket.gethostname(),
+                "uptime": now - psutil.boot_time()}
+
+    def render_system(self):
+        w = max(10, self.query_one("#sys").size.width - 24)
+        s = demo_system(self.demo) if self.demo else self.read_system()
+        cores, load, down, up = s["cores"], s["load"], s["down"], s["up"]
+        cpu = sum(cores) / len(cores)
+        self.cpu_hist = (self.cpu_hist + [cpu])[-300:]
+        hist = self.cpu_hist[-w:]
 
         def row(label, pct, text):
             return f"[b $accent]{label}[/] {bar(pct, w)} {pct:3.0f}% [dim]{text}[/]"
         lines = [
-            f"[b $accent]CPU [/] {spark(self.cpu_hist)}{' ' * (w - len(self.cpu_hist))} {cpu:3.0f}% [dim]{len(cores)} cores[/]",
+            f"[b $accent]CPU [/] {spark(hist)}{' ' * (w - len(hist))} {cpu:3.0f}% [dim]{len(cores)} cores[/]",
             f"[b $accent]CORE[/] {spark(cores)}",
-            row("MEM ", mem.percent, f"{human(mem.used, 'B')}/{human(mem.total, 'B')}"),
-            row("SWAP", swap.percent, f"{human(swap.used, 'B')}/{human(swap.total, 'B')}"),
-            row("DISK", disk.percent, f"{human(disk.used, 'B')}/{human(disk.total, 'B')}"),
+            *(row(f"{k.upper():<4}", s[k][0], f"{human(s[k][1], 'B')}/{human(s[k][2], 'B')}")
+              for k in ("mem", "swap", "disk")),
             f"[b $accent]NET [/] [$success]↓[/] {human(down, 'B/s'):>9}  [$warning]↑[/] {human(up, 'B/s'):>9}"
             f"   [b $accent]LOAD[/] {load[0]:.2f} {load[1]:.2f} {load[2]:.2f}",
         ]
         box = self.query_one("#sys")
         box.update("\n".join(lines))
-        box.border_subtitle = f"{socket.gethostname()} · up {dur(time.time() - psutil.boot_time())} · {datetime.now():%H:%M:%S}"
+        box.border_subtitle = f"{s['host']} · up {dur(s['uptime'])} · {datetime.now():%H:%M:%S}"
 
     def render_tokens(self):
         today = date.today()
@@ -427,7 +493,9 @@ class Plexonator(App):
 
     def render_agents(self):
         names = [n.strip() for n in self.cfg["agents"].split(",") if n.strip()]
-        rows = find_agents(names, self.procs, self.mux)
+        rows = demo_agents(self.demo) if self.demo else find_agents(names, self.procs, self.mux)
+        narrow = self.size.width < 124
+        task_w = 24 if narrow else max(24, self.size.width - 100)  # the task column takes the spare width
         table = self.query_one("#agents", DataTable)
         cursor = table.cursor_row
         table.clear()
@@ -437,8 +505,8 @@ class Plexonator(App):
             table.add_row(
                 Text("●", style="green" if r["working"] else "grey50"),
                 Text(r["name"], style="bold"),
-                Text(cwd if len(cwd) < 32 else "…" + cwd[-31:]),
-                Text(r["title"][:48]),
+                Text(os.path.basename(cwd) if narrow else cwd if len(cwd) < 32 else "…" + cwd[-31:]),
+                Text(r["title"][:task_w].ljust(task_w)),
                 Text(r["where"]),
                 Text(f"{r['cpu']:4.0f}%", justify="right"),
                 Text(human(r["mem"], "B"), justify="right"),
@@ -482,4 +550,7 @@ if __name__ == "__main__":
     elif sys.platform != "linux":
         sys.exit("plexonator supports Linux only for now")
     else:
-        Plexonator().run()
+        demo = next((a.partition("=")[2] or "busy" for a in sys.argv if a.startswith("--demo")), None)
+        if demo and demo not in DEMO:
+            sys.exit(f"unknown demo: {demo} (choose from {', '.join(DEMO)})")
+        Plexonator(demo).run()

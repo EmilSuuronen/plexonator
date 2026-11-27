@@ -8,6 +8,8 @@ Linux only (WSL works).
 
     ./plexonator.py        # needs uv (https://docs.astral.sh/uv/); dependencies install themselves
 
+Try it with made-up data: `./plexonator.py --demo` (or `--demo=calm`).
+
 Keys: `s` settings (saved to `~/.config/plexonator/config.json`), `q` quit.
 
 ## Open it with your session
@@ -24,3 +26,8 @@ tmux (`~/.tmux.conf`):
 - Status: "working" = session log written in the last 15 s, or CPU above 10%.
 
 Self-check: `./plexonator.py --selftest`
+
+## Website
+
+`docs/` is a static page for GitHub Pages. Its screenshots come from demo mode only:
+`./docs/make_shots.py` regenerates them.
