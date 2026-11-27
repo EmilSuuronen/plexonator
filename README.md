@@ -1,45 +1,78 @@
 # plexonator
 
-One-pane terminal dashboard for people running many AI coding agents in tmux / cmux.
-Shows running agents (Claude Code, Codex, ...), what they are doing, system resources, and token totals.
-Linux only (WSL works).
+One terminal pane that shows every AI coding agent you have running: which ones need you, what each
+one is doing, and how many tokens and how much of your machine they are eating.
 
-## Run
+Made for people who run a lot of Claude Code, Codex and friends side by side in tmux or cmux.
 
-    ./plexonator.py        # needs uv (https://docs.astral.sh/uv/); dependencies install themselves
+![plexonator showing nine agents, system resources and token totals](docs/shots/hero.svg)
 
-Try it with made-up data: `./plexonator.py --demo` (or `--demo=calm`).
+## Install
 
-Keys: `enter` agent details, `g` go to the agent's pane, `s` settings, `q` quit.
+Linux and WSL. You need [uv](https://docs.astral.sh/uv/); it fetches Python and the two dependencies on first run.
 
-## Exact "needs you" status (Claude Code)
+```sh
+git clone https://github.com/EmilSuuronen/plexonator
+./plexonator/plexonator.py
+```
 
-    ./plexonator.py --install-hooks
+Want to look around first? `./plexonator.py --demo` runs it on made-up data.
 
-Adds a small hook to `~/.claude/settings.json` (a backup is kept next to it) so plexonator knows when an
-agent is blocked on a permission prompt, working, or done. Without it, status is estimated from activity.
-`--uninstall-hooks` removes it. Applies to agents started after you install.
+## What you get
 
-## Open it with your session
+- **Agent table.** Every running agent with its project, task, state (working, needs you, done, idle),
+  context-window use, session tokens, CPU, memory and pane.
+- **Agent details.** Press `enter` on an agent: last prompt, last tool call, last reply, model, branch.
+- **Jump to the pane.** Press `g` and tmux or cmux focuses the pane that agent runs in.
+- **Token totals.** Today, 7 days and all time for Claude Code and Codex, plus Codex rate limits.
+- **System panel.** CPU, memory, swap, disk, network, and what your agents add up to.
+- **Themes and settings.** Press `s`; changes apply live and are saved.
 
-tmux (`~/.tmux.conf`):
+| Key | Does |
+| --- | --- |
+| `↑` `↓` | move between agents |
+| `enter` | agent details |
+| `g` | go to the agent's pane |
+| `s` | settings |
+| `q` | quit |
 
-    set-hook -g session-created 'split-window -h -l 40% ~/projects/plexonator/plexonator.py'
+## Exact "needs you" status
 
-## How it works
+By default, state is estimated from log activity. For Claude Code you can make it exact:
 
-- Agents: scans `/proc` for the process names in settings; maps them to tmux panes / cmux terminals.
-- Tokens: reads `~/.claude/projects/**/*.jsonl` and `~/.codex/sessions/**/*.jsonl` incrementally
-  (cache in `~/.cache/plexonator/tokens.json`). These formats are undocumented and may change.
-- Status: from the hook's last event when installed; otherwise "working" = session log written in the
-  last 15 s, or CPU above 10%.
-- Per-agent context and tokens come from the same logs (Claude Code and Codex only). Claude logs do not
-  state the context window size, so it is assumed to be 200K, or 1M once a session exceeds that.
-- `g` asks tmux or cmux to focus the agent's pane.
+```sh
+./plexonator.py --install-hooks
+```
 
-Self-check: `./plexonator.py --selftest`
+This adds a small hook to `~/.claude/settings.json` and keeps a backup next to it.
+`--uninstall-hooks` removes it. It applies to agents started after you install.
 
-## Website
+## Open it with every tmux session
 
-`docs/` is a static page for GitHub Pages. Its screenshots come from demo mode only:
-`./docs/make_shots.py` regenerates them.
+Add to `~/.tmux.conf`, with the path you cloned to:
+
+```
+set-hook -g session-created 'split-window -h -l 40% ~/plexonator/plexonator.py'
+```
+
+## How it works, and its limits
+
+plexonator only reads. It looks at running processes and at the session logs your agents already
+write (`~/.claude/projects`, `~/.codex/sessions`). Nothing is sent anywhere.
+
+- Those log formats are undocumented and can change with any agent update.
+- Details, context and tokens exist for Claude Code and Codex. Gemini, aider, opencode and amp are
+  listed with process data only.
+- Claude logs do not state the context window size, so it is assumed to be 200K (1M once a session
+  goes past 200K).
+- Two agents of the same kind in the same folder can be mixed up outside cmux.
+- Pane mapping and `g` work with tmux and cmux. In other terminals you still get the table.
+
+## Development
+
+```sh
+./plexonator.py --selftest    # parsers, hooks, status rules and the UI
+./docs/make_shots.py          # regenerate the website screenshots from demo data
+```
+
+Everything is in `plexonator.py`. The website in `docs/` is a single static page.
