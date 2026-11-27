@@ -386,8 +386,6 @@ class Plexonator(App):
     def on_mount(self):
         self.query_one("#sys").border_title = "SYSTEM"
         self.query_one("#tok").border_title = "TOKENS"
-        self.query_one("#agents", DataTable).add_columns(
-            "", "AGENT", "PROJECT", "TASK", "WHERE", "CPU", "MEM", "UP", "ACTIVE")
         psutil.cpu_percent(None)
         self.timer = None
         self.apply_config()
@@ -499,7 +497,8 @@ class Plexonator(App):
         task_w = 24 if narrow else max(24, self.size.width - 100)  # the task column takes the spare width
         table = self.query_one("#agents", DataTable)
         cursor = table.cursor_row
-        table.clear()
+        table.clear(columns=True)  # columns too: their widths never shrink otherwise
+        table.add_columns("", "AGENT", "PROJECT", "TASK", "WHERE", "CPU", "MEM", "UP", "ACTIVE")
         now = time.time()
         for r in rows:
             cwd = r["cwd"].replace(str(HOME), "~", 1)
