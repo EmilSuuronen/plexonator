@@ -303,7 +303,21 @@ def jump(target):
         done = ok("tmux", "select-window", "-t", ident) and ok("tmux", "select-pane", "-t", ident)
         ok("tmux", "switch-client", "-t", ident)  # only matters when the pane is in another session
         return done
-    return ok(str(HOME / ".cmux" / "bin" / "cmux"), "tab", ident, "focus")
+    # cmux: focusing a tab only selects it inside its pane, so walk up and focus each level
+    cmux = str(HOME / ".cmux" / "bin" / "cmux")
+
+    def show(scope, ident):
+        try:
+            return json.loads(_run(cmux, "--json", scope, ident, "show") or "{}")
+        except ValueError:
+            return {}
+    pane = show("tab", ident).get("pane_id")
+    screen = show("pane", pane).get("screen_id") if pane else None
+    workspace = show("screen", screen).get("workspace_id") if screen else None
+    for scope, target_id in (("workspace", workspace), ("screen", screen)):
+        if target_id:
+            ok(cmux, scope, target_id, "focus")
+    return bool(pane) and ok(cmux, "pane", pane, "focus") and ok(cmux, "tab", ident, "focus")
 
 
 # ── agents ──────────────────────────────────────────────────────────────────
@@ -803,7 +817,19 @@ class Plexonator(App):
             time.sleep(10)
 
     # ── rendering ──
+    def keep_focus(self):
+        """The table is the only thing to navigate; a click elsewhere must not leave nothing focused."""
+        if self.main and self.screen is self.main and self.focused is None:
+            self.main.query_one("#agents", DataTable).focus()
+
+    def on_click(self):
+        self.call_after_refresh(self.keep_focus)
+
+    def on_app_focus(self):
+        self.call_after_refresh(self.keep_focus)
+
     def tick(self):
+        self.keep_focus()
         self.render_system()
         self.render_tokens()
         self.render_agents()
@@ -1012,6 +1038,9 @@ async def selftest_settings():
             app.tick()  # the dashboard must keep drawing underneath the dialog
             await pilot.press("escape")
             assert load_json(CONFIG, {})["theme"] == app.theme
+            await pilot.click("#sys")  # clicking a panel must not strand the arrow keys
+            await pilot.pause()
+            assert isinstance(app.focused, DataTable), app.focused
             await pilot.press("enter")  # the table row opens the detail panel
             assert isinstance(app.screen, Detail), app.screen
             app.tick()
