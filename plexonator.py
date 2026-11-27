@@ -403,8 +403,9 @@ class Plexonator(App):
         self.on_resize()
 
     def on_resize(self, event=None):
-        self.query_one("#logo").display = self.cfg["logo"] and self.size.width >= 88 and self.size.height >= 30
-        self.query_one("#top").set_class(self.size.width < 124, "narrow")  # side-pane widths: stack the boxes
+        size = event.size if event else self.size  # self.size is still the old size during a resize
+        self.query_one("#logo").display = self.cfg["logo"] and size.width >= 88 and size.height >= 30
+        self.query_one("#top").set_class(size.width < 124, "narrow")  # side-pane widths: stack the boxes
         self.call_after_refresh(self.tick)  # bars are sized from the laid-out panel width
 
     def action_settings(self):
