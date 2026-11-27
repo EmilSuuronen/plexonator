@@ -112,7 +112,7 @@ import psutil  # noqa: E402
 from rich.text import Text  # noqa: E402
 from textual.app import App  # noqa: E402
 from textual.containers import Horizontal, Vertical, VerticalScroll  # noqa: E402
-from textual.markup import escape  # noqa: E402
+from textual.content import Content  # noqa: E402
 from textual.screen import ModalScreen  # noqa: E402
 from textual.widgets import DataTable, Footer, Input, Label, Static  # noqa: E402
 
@@ -587,22 +587,25 @@ def ctx_pct(r):
 
 
 def detail_text(r, d):
-    """The body of the detail panel for one agent row `r` and its log details `d`."""
+    """The body of the detail panel for one agent row `r` and its log details `d`.
+
+    Text from logs goes in as $variables or plain Content, never as markup: escape() is not enough
+    for arbitrary text once lines are joined (a stray "[" can swallow the next line's tag).
+    """
     now = time.time()
     sym, word, _, colour = STATES[r["state"]]
     message = (r.get("hook") or {}).get("message") if r["state"] == "needs" else None
     pct, tok = ctx_pct(r), r.get("tok")
-    active = dur(now - r["act"]) + " ago" if r["act"] else "unknown"
 
-    def field(label, text):
-        return f"[b $accent]{label:<8}[/]{text}"
+    def field(label, markup, **values):
+        return Content.from_markup(f"[b $accent]{label:<8}[/]" + markup, **values)
     lines = [
-        field("STATE", f"[b {colour}]{sym} {word}[/]" + (f"  {escape(str(message))}" if message else "")),
-        field("TASK", escape(r["title"] or "—")),
-        field("MODEL", escape(str(r.get("model") or "—")) + f"   [b $accent]BRANCH[/] {escape(str(d.get('branch') or '—'))}"),
-        field("PANE", escape(r["where"] or "not in a known pane")
-              + f"   [dim]pid {r['pid']} · up {dur(now - r['started'])} · active {active}[/]"),
-        field("FOLDER", escape(r["cwd"].replace(str(HOME), "~", 1))),
+        field("STATE", f"[b {colour}]{sym} {word}[/]  $message", message=str(message or "")),
+        field("TASK", "$v", v=r["title"] or "—"),
+        field("MODEL", "$v   [b $accent]BRANCH[/] $branch", v=str(r.get("model") or "—"), branch=str(d.get("branch") or "—")),
+        field("PANE", "$v   [dim]pid $pid · up $up · active $active[/]", v=r["where"] or "not in a known pane",
+              pid=str(r["pid"]), up=dur(now - r["started"]), active=dur(now - r["act"]) + " ago" if r["act"] else "unknown"),
+        field("FOLDER", "$v", v=r["cwd"].replace(str(HOME), "~", 1)),
         field("CONTEXT", f"{bar(pct, 30)} {pct:.0f}%  [dim]{human(r['ctx'])} of {human(r['win'])}[/]"
               if pct is not None else "[dim]not available for this agent[/]"),
         field("TOKENS", f"[b]{human(sum(tok))}[/] this session  [dim]in {human(tok[0])} · out {human(tok[1])} · "
@@ -610,8 +613,9 @@ def detail_text(r, d):
     ]
     for label, key, limit in (("LAST PROMPT", "prompt", 500), ("LAST TOOL CALL", "tool", 200), ("LAST REPLY", "reply", 900)):
         text = " ".join(str(d.get(key) or "").split())
-        lines += ["", f"[b $accent]{label}[/]", escape(text[:limit] + ("…" if len(text) > limit else "")) if text else "[dim]—[/]"]
-    return "\n".join(lines + ["", "[dim]g go to pane · esc close[/]"])
+        lines += [Content(""), Content.from_markup(f"[b $accent]{label}[/]"),
+                  Content(text[:limit] + ("…" if len(text) > limit else "") if text else "—")]
+    return Content("\n").join(lines + [Content(""), Content.from_markup("[dim]g go to pane · esc close[/]")])
 
 
 def spark(values):
@@ -701,7 +705,7 @@ class Detail(ModalScreen):
             d = {**DEMO_DETAIL, "branch": r.get("branch")}
         else:
             d = read_detail(r["log"], r["name"]) if r["log"] else {}
-        self.query_one("#detail").border_title = f"{r['name']} · {os.path.basename(r['cwd']) or r['cwd']}"
+        self.query_one("#detail").border_title = Content(f"{r['name']} · {os.path.basename(r['cwd']) or r['cwd']}")
         self.query_one("#detail-body", Static).update(detail_text(r, d))
 
     def action_jump(self):
@@ -1014,13 +1018,13 @@ def selftest_agents():
     assert read_detail(log, "codex") == {"tool": "shell ls"}
     assert read_detail(tmp / "missing", "claude") == {}
 
-    from textual.content import Content
-    hostile = "[/] [bold] $accent \\[x] end\\"  # log text must never be read as markup
-    for state in STATES:  # every state's colour tag must parse, with and without optional fields
+    hostile = "[/] [bold] $accent \\[x] print(a[\nb] end\\ ["  # log text must never be read as markup
+    for state in STATES:  # with and without the optional fields
         for extra in ({}, {"ctx": 5000, "tok": [1, 2, 3, 4], "hook": {"message": hostile}, "model": hostile}):
             r = {"state": state, "title": hostile, "where": hostile, "pid": 1, "started": 0, "act": None,
                  "cwd": hostile, "win": 200_000, **extra}
-            Content.from_markup(detail_text(r, {"prompt": hostile, "tool": hostile, "reply": hostile, "branch": hostile}))
+            body = detail_text(r, {"prompt": hostile, "tool": hostile, "reply": hostile, "branch": hostile})
+            assert body.plain.count("[/] [bold] $accent") >= 6 and "LAST REPLY" in body.plain, body.plain
 
     files = {"a": {"limits_ts": "1", "limits": {"primary": {"used_percent": 5, "window_minutes": 300, "resets_at": 2000}}},
              "b": {"limits_ts": "2", "limits": {"primary": {"used_percent": 22, "window_minutes": 300, "resets_at": 2000},
